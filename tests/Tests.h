@@ -15,6 +15,7 @@ public:
     CPPUNIT_TEST(testPrivKeyGen);
     CPPUNIT_TEST(testPubKeyGen);
     CPPUNIT_TEST(testCertGen);
+    CPPUNIT_TEST(testCertCheck);
     CPPUNIT_TEST(testSignData);
     CPPUNIT_TEST(testSymEncrypt);
     CPPUNIT_TEST(testAsymEncrypt);
@@ -26,6 +27,7 @@ protected:
     static EVP_PKEY_ptr testPrivKeyGen();
     static void testPubKeyGen();
     static void testCertGen();
+    static void testCertCheck();
     static void testSignData();
     static void testSymEncrypt();
     static void testSymDecrypt();

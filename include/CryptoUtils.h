@@ -16,6 +16,10 @@
 #include <openssl/rand.h>
 #include <openssl/rsa.h>
 #include <openssl/sha.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/x509_vfy.h>
+#define MAX_CERT_VALIDITY_DAYS 9999999
 
 struct EVP_PKEY_deleter {
     void operator()(EVP_PKEY* evp_pkey) const {
@@ -31,6 +35,21 @@ struct BIODeleter {
 };
 using BioPtr = std::unique_ptr<BIO, BIODeleter>;
 
+// Gestionnaires de mémoire pour OpenSSL
+struct X509Deleter {
+    void operator()(X509* x) const { X509_free(x); }
+};
+struct X509StoreDeleter {
+    void operator()(X509_STORE* s) const { X509_STORE_free(s); }
+};
+struct X509StoreCtxDeleter {
+    void operator()(X509_STORE_CTX* ctx) const { X509_STORE_CTX_free(ctx); }
+};
+
+using X509_ptr = std::unique_ptr<X509, X509Deleter>;
+using X509Store_ptr = std::unique_ptr<X509_STORE, X509StoreDeleter>;
+using X509StoreCtx_ptr = std::unique_ptr<X509_STORE_CTX, X509StoreCtxDeleter>;
+
 class CryptoUtils {
 private:
     static void handleOpenSSLErrors();
@@ -39,10 +58,41 @@ public:
 
     static std::string encryptSym(const std::string& plaintext, const std::string& user_key);
     static std::string decryptSym(const std::string& ciphertext, const std::string& user_key);
+
+    /* Asym */
     static std::vector<unsigned char> rsa_decrypt(const std::vector<unsigned char>& cipherText, EVP_PKEY* pkey);
     static std::vector<unsigned char> rsa_encrypt(const std::vector<char> plainText, EVP_PKEY* pkey);
     static EVP_PKEY_ptr generate_rsa_key(int keylen = 2048);
     static std::string get_pub_key(EVP_PKEY *priv_key);
+
+    /**
+     * Generates an X509 certificate.
+     *
+     * @param ca_key The private key of the certification authority (CA) used to sign the certificate.
+     * @param ca_cert The certificate of the CA. If null, the generated certificate will be self-signed.
+     * @param pub_key The public key to be associated with the generated certificate.
+     * @param cn The Common Name (CN) field in the certificate subject.
+     * @param organisation The Organization (O) field in the certificate subject.
+     * @param country_code The Country (C) field in the certificate subject.
+     * @param day_valid The number of days the certificate is valid for.
+     * @return A unique pointer to the generated X509 certificate.
+     * @throws std::runtime_error if any step in certificate generation or signing fails.
+     */
+    static X509_ptr generate_certificate(EVP_PKEY* ca_key, X509* ca_cert, EVP_PKEY* pub_key, const std::string& cn, const std::string& organisation, const std::string& country_code, int day_valid=MAX_CERT_VALIDITY_DAYS);
+    static BioPtr certificate_to_bio(X509* cert);
+    static std::vector<char> get_bio_to_pem(BIO* bio);
+
+    /**
+     * Checks the validity of a given certificate against an authority's certificate.
+     *
+     * @param cert The certificate to be checked.
+     * @param authority The certificate of the authority against which the validity is checked.
+     * @return True if the certificate is valid, otherwise false.
+     * @throws std::runtime_error if creating or initializing the store or context fails, or
+     *         if certificate verification fails due to invalid input or logic error.
+     */
+    static bool check_certificate_validity(X509* cert, X509* authority);
+    static BioPtr load_certificate(std::vector<char> pem_cert);
 };
 
 

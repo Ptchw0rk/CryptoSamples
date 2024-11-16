@@ -53,15 +53,15 @@ using X509StoreCtx_ptr = std::unique_ptr<X509_STORE_CTX, X509StoreCtxDeleter>;
 class CryptoUtils {
 private:
     static void handleOpenSSLErrors();
-    static void derive_key_from_user_key(const std::string& user_key, unsigned char* key, int key_len);
+    static void derive_key_from_user_key(std::vector<unsigned char> user_key, unsigned char* key, int key_len);
 public:
 
-    static std::string encryptSym(const std::string& plaintext, const std::string& user_key);
-    static std::string decryptSym(const std::string& ciphertext, const std::string& user_key);
+    static std::vector<unsigned char> encryptSym(std::vector<unsigned char> plaintext, std::vector<unsigned char> user_key);
+    static std::vector<unsigned char> decryptSym(std::vector<unsigned char> ciphertext, std::vector<unsigned char> user_key);
 
     /* Asym */
-    static std::vector<unsigned char> rsa_decrypt(const std::vector<unsigned char>& cipherText, EVP_PKEY* pkey);
-    static std::vector<unsigned char> rsa_encrypt(const std::vector<char> plainText, EVP_PKEY* pkey);
+    static std::vector<unsigned char> rsa_decrypt(const std::vector<unsigned char>& cipherText, EVP_PKEY* priv_key);
+    static std::vector<unsigned char> rsa_encrypt(const std::vector<unsigned char>& plainText, EVP_PKEY* pub_key);
     static EVP_PKEY_ptr generate_rsa_key(int keylen = 2048);
     static std::string get_pub_key(EVP_PKEY *priv_key);
 
@@ -92,7 +92,10 @@ public:
      *         if certificate verification fails due to invalid input or logic error.
      */
     static bool check_certificate_validity(X509* cert, X509* authority);
-    static BioPtr load_certificate(std::vector<char> pem_cert);
+    static X509_ptr load_certificate(std::vector<char> pem_cert);
+
+    static std::vector<unsigned char> signData(EVP_PKEY* priv_key, std::vector<char> data);
+    static bool checkSignature(std::vector<char> data, std::vector<unsigned char> signature, X509* certificate);
 };
 
 

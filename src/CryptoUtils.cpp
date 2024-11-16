@@ -15,6 +15,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 #include <openssl/x509.h>
@@ -26,6 +27,7 @@ void CryptoUtils::handleOpenSSLErrors() {
 		char *err = ERR_error_string(errCode, nullptr);
 		std::cerr << "Error: " << err << std::endl;
 	}
+	ERR_clear_error();
 	throw std::runtime_error("OpenSSL error");
 	abort();
 }
@@ -41,97 +43,188 @@ void CryptoUtils::handleOpenSSLErrors() {
  * will be stored.
  * @param key_len The length of the derived key in bytes.
  */
-void CryptoUtils::derive_key_from_user_key(const std::string& user_key, unsigned char* key, int key_len) {
+void CryptoUtils::derive_key_from_user_key(std::vector<unsigned char> user_key, unsigned char* key, int key_len) {
 	// Utiliser SHA-256 pour générer une clé de longueur fixe
-	unsigned char hash[SHA256_DIGEST_LENGTH];
-	SHA256((unsigned char*)user_key.c_str(), user_key.size(), hash);
+	//unsigned char hash[SHA256_DIGEST_LENGTH];
+	std::vector<unsigned char> hash(SHA256_DIGEST_LENGTH);
+	SHA256(user_key.data(), user_key.size(), hash.data());
+	//std::printf("Derived key : \n");
+	//for(int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+	//	std::printf("%x", hash[i]);
+	//}
+	//std::printf("\n");
 
 	// Copier la partie nécessaire du hash dans la clé (si la clé est plus courte que 256 bits, on coupe)
-	memcpy(key, hash, key_len);
+	memcpy(key, hash.data(), key_len);
 }
 
 
 
-std::string CryptoUtils::decryptSym(const std::string& ciphertext, const std::string& user_key) {
+std::vector<unsigned char> CryptoUtils::decryptSym(std::vector<unsigned char> ciphertext, std::vector<unsigned char> user_key) {
 	EVP_CIPHER_CTX* ctx;
-	int plaintext_len;
 	int len;
+	int buf_len;
 	const int key_len = 32;
-	unsigned char key[key_len];
+	//unsigned char derived_key[key_len];
+	std::vector<unsigned char> derived_key(key_len);
 
-	unsigned char iv[EVP_MAX_IV_LENGTH];
-	if(!RAND_bytes(iv, EVP_MAX_IV_LENGTH)) {
-		throw std::runtime_error("Error generating IV");
+	//unsigned char iv[16] = {0x12, 0x34, 0x56, 0x78,
+	//0x12, 0x34, 0x56, 0x78,
+	//0x12, 0x34, 0x56, 0x78,
+	//0x12, 0x34, 0x56, 0x78};
+	//unsigned char iv[EVP_MAX_IV_LENGTH];
+	//if(!RAND_bytes(iv, EVP_MAX_IV_LENGTH)) {
+	//	std::cerr << "Error generating IV" << std::endl;
+	//	handleOpenSSLErrors();
+	//}
+	std::vector<unsigned char> iv(EVP_MAX_IV_LENGTH);
+	iv.assign(ciphertext.end()-iv.size(), ciphertext.end());
+	std::vector<unsigned char> ciphertext_without_iv(ciphertext.begin(), ciphertext.end() - iv.size());
+
+
+	// Generate valid key from user key
+	derive_key_from_user_key(std::move(user_key), derived_key.data(), key_len);
+
+	if (!((ctx = EVP_CIPHER_CTX_new()))) {
+		std::cerr << "Unable to create decryption context" << std::endl;
+		handleOpenSSLErrors();
 	}
 
-	// Generate key valid key from user key
-	derive_key_from_user_key(user_key, key, key_len);
-
-	if (!((ctx = EVP_CIPHER_CTX_new()))) throw std::runtime_error("Unable to create decryption context");
-
 	// Initialize cipher algo AES-256 CBC
-	if(!true != EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, key, iv)) throw std::runtime_error("Unable to decrypt sym");
+	std::printf("Derived key : \n");
+	for(unsigned char e : derived_key) {
+		std::printf("%x", e);
+	}
+	std::printf("\n");
+	std::printf("IV : \n");
+	for(int i = 0; i < 16; i++) {
+		std::printf("%x", iv[i]);
+	}
+	std::printf("\n");
+	if(EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, derived_key.data(), iv.data()) != 1) {
+		std::cerr << "Unable to decrypt sym (EVP_DecryptInit_ex)" << std::endl;
+		EVP_CIPHER_CTX_free(ctx);
+		handleOpenSSLErrors();
+	}
 
 	// Allocate memory for ciphertext
-	unsigned char plaintext_buf[ciphertext.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc())];
+	//unsigned char plaintext_buf[ciphertext.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc())];
+	std::vector<unsigned char> plaintext_buf(ciphertext_without_iv.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
 
 	// Cipher
-	if(1 != EVP_DecryptUpdate(ctx, plaintext_buf, &len, (unsigned char*)ciphertext.c_str(), (int)ciphertext.size())) throw std::runtime_error("Unable to encrypt sym");
-	plaintext_len = len;
+	if(EVP_DecryptUpdate(ctx, plaintext_buf.data(), &buf_len, ciphertext_without_iv.data(), static_cast<int>(ciphertext_without_iv.size())) != 1) {
+		std::cerr << "Unable to decrypt sym(EVP_DecryptUpdate)" << std::endl;
+		EVP_CIPHER_CTX_free(ctx);
+		handleOpenSSLErrors();
+	}
+	len = buf_len;
+
+	std::printf("Partial plaintext : \n");
+	for(auto e : plaintext_buf) {
+		std::printf("%c", e);
+	}
+	std::printf("\n");
 
 	// Finalise cipher
-	if(1 != EVP_DecryptFinal_ex(ctx, plaintext_buf, &plaintext_len)) throw std::runtime_error("Unable to decrypt sym");
-	plaintext_len += len;
-
-	// Copy cipher result in new string
-	std::string plaintext = std::string(reinterpret_cast<char*>(plaintext_buf), plaintext_len);
-
+	if(EVP_DecryptFinal_ex(ctx, plaintext_buf.data() + buf_len, &buf_len) != 1) {
+		EVP_CIPHER_CTX_free(ctx);
+		unsigned long errCode = ERR_get_error();
+		if(errCode == 0x1C800064) {
+			throw std::runtime_error("Wrong key or invalid data to decrypt");
+		}
+		std::cerr << "Unable to decrypt sym(EVP_DecryptFinal_ex)" << std::endl;
+		handleOpenSSLErrors();
+	}
+	len += buf_len;
+	plaintext_buf.resize(len);
 
 	// Free ctx
 	EVP_CIPHER_CTX_free(ctx);
 
-	return plaintext;
+	return plaintext_buf;
 }
 
-std::string CryptoUtils::encryptSym(const std::string& plaintext, const std::string& user_key) {
+std::vector<unsigned char> CryptoUtils::encryptSym(std::vector<unsigned char> plaintext, std::vector<unsigned char> user_key) {
+	// todo : manage max size (int)
 	EVP_CIPHER_CTX* ctx;
-	int ciphertext_len;
+	int buf_len;
 	int len;
 	const int key_len = 32;
-	unsigned char key[key_len];
+	//unsigned char derived_key[key_len];
+	std::vector<unsigned char> derived_key(key_len);
 
-	unsigned char iv[EVP_MAX_IV_LENGTH];
-	if(!RAND_bytes(iv, EVP_MAX_IV_LENGTH)) {
-		throw std::runtime_error("Error generating IV");
+	//unsigned char iv[16] = {0x12, 0x34, 0x56, 0x78,
+	//0x12, 0x34, 0x56, 0x78,
+	//0x12, 0x34, 0x56, 0x78,
+	//0x12, 0x34, 0x56, 0x78};
+	//unsigned char iv[EVP_MAX_IV_LENGTH];
+	//if(!RAND_bytes(iv, EVP_MAX_IV_LENGTH)) {
+	//	std::cerr << "Error generating IV" << std::endl;
+	//	handleOpenSSLErrors();
+	//}
+	std::vector<unsigned char> iv(EVP_MAX_IV_LENGTH);
+	if(!RAND_bytes(iv.data(), EVP_MAX_IV_LENGTH)) {
+		std::cerr << "Error generating IV" << std::endl;
+		handleOpenSSLErrors();
 	}
 
 	// Generate key valid key from user key
-	derive_key_from_user_key(user_key, key, key_len);
+	derive_key_from_user_key(std::move(user_key), derived_key.data(), key_len);
+
 
 	if (!((ctx = EVP_CIPHER_CTX_new()))) throw std::runtime_error("Unable to create encryption context");
 
 	// Initialize cipher algo AES-256 CBC
-	if(!true != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, key, iv)) throw std::runtime_error("Unable to encrypt vault");
+	std::printf("Derived key : \n");
+	for(unsigned char e : derived_key) {
+		std::printf("%x", e);
+	}
+	std::printf("\n");
+	std::printf("IV : \n");
+	for(int i = 0; i < 16; i++) {
+		std::printf("%x", iv[i]);
+	}
+	std::printf("\n");
+
+	if(EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, derived_key.data(), iv.data()) != 1) {
+		std::cerr << "Unable to encrypt sym(EVP_EncryptInit_ex)" << std::endl;
+		EVP_CIPHER_CTX_free(ctx);
+		handleOpenSSLErrors();
+	}
 
 	// Allocate memory for ciphertext
-	unsigned char ciphertext_buf[plaintext.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc())];
+	std::vector<unsigned char> ciphertext_buf(plaintext.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
 
 	// Cipher
-	if(1 != EVP_EncryptUpdate(ctx, ciphertext_buf, &len, (unsigned char*)plaintext.c_str(),
-							   static_cast<int>(plaintext.size()))) throw std::runtime_error("Unable to encrypt vault");
-	ciphertext_len = len;
+	if(EVP_EncryptUpdate(ctx, ciphertext_buf.data(), &buf_len, plaintext.data(),
+							   static_cast<int>(plaintext.size())) != 1) {
+		std::cerr << "Unable to encrypt sym(EVP_EncryptUpdate)" << std::endl;
+		EVP_CIPHER_CTX_free(ctx);
+		handleOpenSSLErrors();
+	}
+	len = buf_len;
 
 	// Finalise cipher
-	if(1 != EVP_EncryptFinal_ex(ctx, ciphertext_buf, &ciphertext_len)) throw std::runtime_error("Unable to encrypt vault");
-	ciphertext_len += len;
+	if(EVP_EncryptFinal_ex(ctx, ciphertext_buf.data() + buf_len, &buf_len) != 1) {
+		std::cerr << "Unable to encrypt sym(EVP_EncryptFinal_ex)" << std::endl;
+		EVP_CIPHER_CTX_free(ctx);
+		handleOpenSSLErrors();
+	}
+	len += buf_len;
+	std::printf("Encrypted : \n");
+	for(auto e: ciphertext_buf) {
+		std::printf("%x", e);
+	}
+	std::printf("\n");
 
-	// Copy cipher result in new string
-	std::string ciphertext = std::string(reinterpret_cast<char*>(ciphertext_buf), ciphertext_len);
+	ciphertext_buf.resize(len);
 
 	// Free ctx
 	EVP_CIPHER_CTX_free(ctx);
 
-	return ciphertext;
+	ciphertext_buf.insert(ciphertext_buf.end(), iv.begin(), iv.end());
+
+	return ciphertext_buf;
 }
 
 
@@ -141,22 +234,25 @@ EVP_PKEY_ptr CryptoUtils::generate_rsa_key(int keylen) {
 	//ENGINE *engine = ENGINE_by_id("dynamic");
 	EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
 	if(!ctx) {
-		std::printf("Error creating RSA context\n");
+		std::cerr << "Error creating RSA context\n" << std::endl;
+		EVP_PKEY_CTX_free(ctx);
 		handleOpenSSLErrors();
 	}
 	if(EVP_PKEY_keygen_init(ctx) <= 0) {
-		std::printf("Error EVP_PKEY_keygen_init\n");
+		std::cerr << "Error EVP_PKEY_keygen_init\n" << std::endl;
+		EVP_PKEY_CTX_free(ctx);
 		handleOpenSSLErrors();
 	}
 	if(EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, keylen) <= 0) {
 		//throw std::runtime_error("Can't set RSA key length");
-		std::printf("Error setting keylen\n");
+		std::cerr << "Error setting keylen\n" << std::endl;
+		EVP_PKEY_CTX_free(ctx);
 		handleOpenSSLErrors();
 	}
 	EVP_PKEY* pkey = nullptr;
 	if(EVP_PKEY_keygen(ctx, &pkey) <= 0) {
-		std::printf("Error generating key\n");
-		//throw std::runtime_error("Can't generate RSA key");
+		std::cerr << "Error generating key\n" << std::endl;
+		EVP_PKEY_CTX_free(ctx);
 		handleOpenSSLErrors();
 	}
 
@@ -168,23 +264,26 @@ EVP_PKEY_ptr CryptoUtils::generate_rsa_key(int keylen) {
 
 }
 
-std::vector<unsigned char> CryptoUtils::rsa_decrypt(const std::vector<unsigned char>& cipherText, EVP_PKEY* pkey) {
+std::vector<unsigned char> CryptoUtils::rsa_decrypt(const std::vector<unsigned char>& cipherText, EVP_PKEY* priv_key) {
 	std::vector<unsigned char> decryptedText;
-	decryptedText.resize(EVP_PKEY_size(pkey));
+	decryptedText.resize(EVP_PKEY_size(priv_key));
 
-	EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(pkey, nullptr);
+	EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(priv_key, nullptr);
 	if (!ctx) {
-		throw std::runtime_error("Unable to create decryption context for RSA");
+		std::cerr << "Unable to create decryption context for RSA" << std::endl;
+		handleOpenSSLErrors();
 	}
 	if (EVP_PKEY_decrypt_init(ctx) <= 0) {
 		EVP_PKEY_CTX_free(ctx);
-		throw std::runtime_error("Unable to initialize decryption context for RSA");
+		std::cerr << "Unable to initialize decryption context for RSA" << std::endl;
+		handleOpenSSLErrors();
 	}
 
 	size_t out_len = decryptedText.size();
 	if (EVP_PKEY_decrypt(ctx, decryptedText.data(), &out_len, cipherText.data(), cipherText.size()) <= 0) {
 		EVP_PKEY_CTX_free(ctx);
-		throw std::runtime_error("Decryption failed");
+		std::cerr << "Decryption failed" << std::endl;
+		handleOpenSSLErrors();
 	}
 
 	decryptedText.resize(out_len);
@@ -192,26 +291,30 @@ std::vector<unsigned char> CryptoUtils::rsa_decrypt(const std::vector<unsigned c
 	return decryptedText;
 }
 
-std::vector<unsigned char> CryptoUtils::rsa_encrypt(const std::vector<char> plainText, EVP_PKEY* pkey) {
-	EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(pkey, nullptr);
+std::vector<unsigned char> CryptoUtils::rsa_encrypt(const std::vector<unsigned char>& plainText, EVP_PKEY* pub_key) {
+	EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(pub_key, nullptr);
 	if (!ctx) {
-		throw std::runtime_error("Unable to create encryption context for RSA");
+		std::cerr << "Unable to create encryption context for RSA" << std::endl;
+		handleOpenSSLErrors();
 	}
 	if (EVP_PKEY_encrypt_init(ctx) <= 0) {
 		EVP_PKEY_CTX_free(ctx);
-		throw std::runtime_error("Unable to initialize encryption context for RSA");
+		std::cerr << "Unable to initialize encryption context for RSA" << std::endl;
+		handleOpenSSLErrors();
 	}
 
 	size_t out_len;
 	if (EVP_PKEY_encrypt(ctx, nullptr, &out_len, reinterpret_cast<const unsigned char*>(plainText.data()), plainText.size()) <= 0) {
 		EVP_PKEY_CTX_free(ctx);
-		throw std::runtime_error("Unable to determine encrypted length");
+		std::cerr << "Unable to determine encrypted length" << std::endl;
+		handleOpenSSLErrors();
 	}
 
 	std::vector<unsigned char> encrypted(out_len);
 	if (EVP_PKEY_encrypt(ctx, encrypted.data(), &out_len, reinterpret_cast<const unsigned char*>(plainText.data()), plainText.size()) <= 0) {
 		EVP_PKEY_CTX_free(ctx);
-		throw std::runtime_error("Encryption failed");
+		std::cerr << "Encryption failed" << std::endl;
+		handleOpenSSLErrors();
 	}
 
 	EVP_PKEY_CTX_free(ctx);
@@ -222,7 +325,8 @@ std::vector<unsigned char> CryptoUtils::rsa_encrypt(const std::vector<char> plai
 X509_ptr CryptoUtils::generate_certificate(EVP_PKEY* ca_key, X509* ca_cert, EVP_PKEY* pub_key, const std::string& cn, const std::string& organisation, const std::string& country_code, int day_valid) {
 	X509_ptr x509(X509_new());
 	if(!x509) {
-		throw std::runtime_error("Unable to generate certificate");
+		std::cerr << "Unable to generate certificate" << std::endl;
+		handleOpenSSLErrors();
 	}
 	X509_set_version(x509.get(), 3);
 	// Set serial number
@@ -262,16 +366,19 @@ X509_ptr CryptoUtils::generate_certificate(EVP_PKEY* ca_key, X509* ca_cert, EVP_
 	std::string constraint_str = ca_cert == nullptr ? "CA:TRUE" : "CA:FALSE";
 	X509_EXTENSION* ext = X509V3_EXT_conf_nid(nullptr, &ctx, NID_basic_constraints, constraint_str.c_str());
 	if(!ext) {
-		throw std::runtime_error("Unable to create certificate extension");
+		std::cerr << "Unable to create certificate extension" << std::endl;
+		handleOpenSSLErrors();
 	}
 	if(X509_add_ext(x509.get(), ext, -1) != 1) {
-		throw std::runtime_error("Unable to add certificate extension");
+		std::cerr << "Unable to add certificate extension" << std::endl;
+		handleOpenSSLErrors();
 	}
 
 	// Define certificate emitter (sign)
 	if(!X509_sign(x509.get(), ca_key, EVP_sha256()))
 	{
-		throw std::runtime_error("Unable to sign certificate");
+		std:: cerr << "Unable to sign certificate" << std::endl;
+		handleOpenSSLErrors();
 	}
 	return x509;
 }
@@ -287,10 +394,12 @@ std::string CryptoUtils::get_pub_key(EVP_PKEY *priv_key) {
 BioPtr CryptoUtils::certificate_to_bio(X509* cert) {
 	BioPtr bio(BIO_new(BIO_s_mem()));
 	if(!bio) {
-		throw std::runtime_error("Unable to allocate BIO");
+		std::cerr << "Unable to allocate BIO" << std::endl;
+		handleOpenSSLErrors();
 	}
 	if(!PEM_write_bio_X509(bio.get(), cert)) {
-		throw std::runtime_error("Unable to write certificate to BIO");
+		std::cerr << "Unable to write certificate to BIO" << std::endl;
+		handleOpenSSLErrors();
 	}
 	return bio;
 }
@@ -301,39 +410,119 @@ std::vector<char> CryptoUtils::get_bio_to_pem(BIO* bio) {
 	return std::vector<char>(pem_data, pem_data + pem_size);
 }
 
-BioPtr CryptoUtils::load_certificate(std::vector<char> pem_cert) {
-	BioPtr bio(BIO_new(BIO_s_mem()));
-	if(!bio) {
-		throw std::runtime_error("Unable to load certificate");
-	}
-	X509_ptr cert(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr));
-	if(!cert) {
-		throw std::runtime_error("Unable to load certificate");
-	}
-}
-
 bool CryptoUtils::check_certificate_validity(X509* cert, X509* authority) {
 	X509Store_ptr store(X509_STORE_new());
 	if(!store) {
-		throw std::runtime_error("Unable to create store");
+		std::cerr << "Unable to create store" << std::endl;
+		handleOpenSSLErrors();
 	}
 
 	X509_STORE_add_cert(store.get(), authority);
 
 	X509StoreCtx_ptr ctx(X509_STORE_CTX_new());
 	if(!ctx) {
-		throw std::runtime_error("Unable to create store context");
+		std::cerr << "Unable to create store context" << std::endl;
+		handleOpenSSLErrors();
 	}
 
 	if(X509_STORE_CTX_init(ctx.get(), store.get(), cert, nullptr) != 1) {
-		throw std::runtime_error("Unable to initialize store context");
+		std::cerr << "Unable to initialize store context" << std::endl;
+		handleOpenSSLErrors();
 	}
 
 	if(X509_verify_cert(ctx.get()) != 1) {
-		throw std::runtime_error("Unable to verify certificate");
+		std::cerr << "Unable to verify certificate" << std::endl;
+		handleOpenSSLErrors();
 	}
 	return true;
 
+}
+
+X509_ptr CryptoUtils::load_certificate(std::vector<char> pem_cert) {
+	BioPtr bio(BIO_new(BIO_s_mem()));
+	if(!bio) {
+		std::cerr << "Unable to load certificate" << std::endl;
+		handleOpenSSLErrors();
+	}
+	if(BIO_write(bio.get(), pem_cert.data(), pem_cert.size()) <= 0) {
+		std::cerr << "Unable to write to BIO" << std::endl;
+		handleOpenSSLErrors();
+	}
+
+	X509_ptr cert(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr));
+	if(!cert) {
+		std::cerr << "Unable to load certificate" << std::endl;
+		handleOpenSSLErrors();
+	}
+	return cert;
+}
+
+std::vector<unsigned char> CryptoUtils::signData(EVP_PKEY* priv_key, std::vector<char> data) {
+	EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
+	if(!md_ctx) {
+		std::cerr << "Unable to create MD context" << std::endl;
+		EVP_MD_CTX_free(md_ctx);
+		handleOpenSSLErrors();
+	}
+	if(EVP_SignInit(md_ctx, EVP_sha256()) <= 0) {
+		std::cerr << "Unable to initialize MD context" << std::endl;
+		EVP_MD_CTX_free(md_ctx);
+		handleOpenSSLErrors();
+	}
+
+	// Add data to signature
+	if(EVP_SignUpdate(md_ctx, data.data(), data.size()) <= 0) {
+		std::cerr << "Unable to add data to MD context" << std::endl;
+		EVP_MD_CTX_free(md_ctx);
+		handleOpenSSLErrors();
+	}
+
+	unsigned int sig_len = 0;
+	std::vector<unsigned char> signature(EVP_PKEY_size(priv_key));
+	// Sign digest with priv key
+	if(EVP_SignFinal(md_ctx, signature.data(), &sig_len, priv_key) <= 0) {
+		std::cerr << "Unable to sign MD context" << std::endl;
+		EVP_MD_CTX_free(md_ctx);
+		handleOpenSSLErrors();
+	}
+
+	signature.resize(sig_len);
+	EVP_MD_CTX_free(md_ctx);
+
+	return signature;
+}
+
+bool CryptoUtils::checkSignature(std::vector<char> data, std::vector<unsigned char> signature, X509* certificate) {
+	EVP_PKEY_ptr public_key(X509_get_pubkey(certificate));
+	if(!public_key) {
+		std::cerr << "Unable to get public key" << std::endl;
+		handleOpenSSLErrors();
+	}
+
+	EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
+	if(!md_ctx) {
+		std::cerr << "Unable to create MD ctx" << std::endl;
+		EVP_MD_CTX_free(md_ctx);
+		handleOpenSSLErrors();
+	}
+
+	if(EVP_VerifyInit(md_ctx, EVP_sha256()) <= 0) {
+		std::cerr << "Unable to initialize MD ctx" << std::endl;
+		EVP_MD_CTX_free(md_ctx);
+		handleOpenSSLErrors();
+	}
+
+	if(EVP_VerifyUpdate(md_ctx, data.data(), data.size()) <= 0) {
+		std::cerr << "Unable to verify MD ctx" << std::endl;
+		EVP_MD_CTX_free(md_ctx);
+		handleOpenSSLErrors();
+	}
+
+	int result = EVP_VerifyFinal(md_ctx, signature.data(), signature.size(), public_key.get());
+	ERR_clear_error();
+
+	EVP_MD_CTX_free(md_ctx);
+	return result == 1;
 }
 
 // https://www.talm.ai/how-to-access-the-raw-public-private-tuple-and-params-inside-openssls-evp_pkey-structure/

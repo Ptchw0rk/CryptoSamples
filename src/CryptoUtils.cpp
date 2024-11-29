@@ -370,14 +370,6 @@ std::vector<unsigned char> CryptoUtils::export_priv_key(const EVP_PKEY *pub_key,
 }
 
 EVP_PKEY_ptr CryptoUtils::load_priv_key(const std::vector<unsigned char> &priv_key_pem, const std::string& password) {
-    /*BioPtr bio(BIO_new(BIO_s_mem()));
-    BIO_write(bio.get(), priv_key_pem.data(), static_cast<int>(priv_key_pem.size()));
-    EVP_PKEY_ptr priv_key(PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr));
-    if(!priv_key) {
-        std::cerr << "Unable to load private key" << std::endl;
-        handleOpenSSLErrors();
-    }
-    return priv_key;*/
     BioPtr bio(BIO_new(BIO_s_mem()));
     BIO_write(bio.get(), priv_key_pem.data(), static_cast<int>(priv_key_pem.size()));
 

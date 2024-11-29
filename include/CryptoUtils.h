@@ -68,6 +68,8 @@ public:
     static std::vector<unsigned char> export_priv_key(const EVP_PKEY *pub_key, const std::string &password = "");
     static EVP_PKEY_ptr load_priv_key(const std::vector<unsigned char> &priv_key_pem, const std::string& password = "");
     static EVP_PKEY_ptr load_pub_key(std::vector<unsigned char> pub_key_pem);
+    static bool check_pub_key_pem(std::vector<unsigned char> pub_key_pem);
+    static bool check_priv_key_pem(const std::vector<unsigned char> &priv_key_pem, const std::string& password = "");
 
     /**
      * Generates an X509 certificate.
@@ -83,7 +85,7 @@ public:
      * @throws std::runtime_error if any step in certificate generation or signing fails.
      */
     static X509_ptr generate_certificate(EVP_PKEY* ca_key, X509* ca_cert, EVP_PKEY* pub_key, const std::string& cn, const std::string& organisation, const std::string& country_code, int day_valid=MAX_CERT_VALIDITY_DAYS);
-    static BioPtr certificate_to_bio(X509* cert);
+    static BioPtr certificate_to_bio(const X509* cert);
     static std::vector<unsigned char> get_bio_to_pem(BIO* bio);
 
     /**

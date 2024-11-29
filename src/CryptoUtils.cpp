@@ -421,7 +421,24 @@ EVP_PKEY_ptr CryptoUtils::load_pub_key(std::vector<unsigned char> pub_key_pem) {
     return EVP_PKEY_ptr(pub_key);
 }
 
-BioPtr CryptoUtils::certificate_to_bio(X509 *cert) {
+bool CryptoUtils::check_pub_key_pem(std::vector<unsigned char> pub_key_pem) {
+    try {
+        load_pub_key(std::move(pub_key_pem));
+    } catch(std::runtime_error&) {
+        return false;
+    }
+    return true;
+}
+bool CryptoUtils::check_priv_key_pem(const std::vector<unsigned char> &priv_key_pem, const std::string& password) {
+    try {
+        load_priv_key(priv_key_pem, password);
+    } catch(std::runtime_error&) {
+        return false;
+    }
+    return true;
+}
+
+BioPtr CryptoUtils::certificate_to_bio(const X509 *cert) {
     BioPtr bio(BIO_new(BIO_s_mem()));
     if (!bio) {
         std::cerr << "Unable to allocate BIO" << std::endl;
@@ -441,7 +458,7 @@ std::vector<unsigned char> CryptoUtils::get_bio_to_pem(BIO *bio) {
 }
 
 bool CryptoUtils::check_certificate_validity(X509 *cert, X509 *authority) {
-    X509Store_ptr store(X509_STORE_new());
+    const X509Store_ptr store(X509_STORE_new());
     if (!store) {
         std::cerr << "Unable to create store" << std::endl;
         handleOpenSSLErrors();
@@ -449,7 +466,7 @@ bool CryptoUtils::check_certificate_validity(X509 *cert, X509 *authority) {
 
     X509_STORE_add_cert(store.get(), authority);
 
-    X509StoreCtx_ptr ctx(X509_STORE_CTX_new());
+    const X509StoreCtx_ptr ctx(X509_STORE_CTX_new());
     if (!ctx) {
         std::cerr << "Unable to create store context" << std::endl;
         handleOpenSSLErrors();
@@ -461,7 +478,7 @@ bool CryptoUtils::check_certificate_validity(X509 *cert, X509 *authority) {
     }
 
     if (X509_verify_cert(ctx.get()) != 1) {
-        std::cerr << "Unable to verify certificate" << std::endl;
+        std::cerr << "Certificate verification failed" << std::endl;
         handleOpenSSLErrors();
     }
     return true;
@@ -473,7 +490,7 @@ X509_ptr CryptoUtils::load_certificate(std::vector<unsigned char> pem_cert) {
         std::cerr << "Unable to load certificate" << std::endl;
         handleOpenSSLErrors();
     }
-    if (BIO_write(bio.get(), pem_cert.data(), pem_cert.size()) <= 0) {
+    if (BIO_write(bio.get(), pem_cert.data(), static_cast<int>(pem_cert.size())) <= 0) {
         std::cerr << "Unable to write to BIO" << std::endl;
         handleOpenSSLErrors();
     }

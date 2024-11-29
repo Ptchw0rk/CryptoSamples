@@ -56,6 +56,7 @@ private:
     static void derive_key_from_user_key(std::vector<unsigned char> user_key, unsigned char* key, int key_len);
 public:
 
+    /* Sym */
     static std::vector<unsigned char> encryptSym(std::vector<unsigned char> plaintext, std::vector<unsigned char> user_key);
     static std::vector<unsigned char> decryptSym(std::vector<unsigned char> ciphertext, std::vector<unsigned char> user_key);
 
@@ -63,7 +64,10 @@ public:
     static std::vector<unsigned char> rsa_decrypt(const std::vector<unsigned char>& cipherText, EVP_PKEY* priv_key);
     static std::vector<unsigned char> rsa_encrypt(const std::vector<unsigned char>& plainText, EVP_PKEY* pub_key);
     static EVP_PKEY_ptr generate_rsa_key(int keylen = 2048);
-    static std::string get_pub_key(EVP_PKEY *priv_key);
+    static std::vector<unsigned char> export_pub_key(const EVP_PKEY *key);
+    static std::vector<unsigned char> export_priv_key(const EVP_PKEY *pub_key, const std::string &password = "");
+    static EVP_PKEY_ptr load_priv_key(const std::vector<unsigned char> &priv_key_pem, const std::string& password = "");
+    static EVP_PKEY_ptr load_pub_key(std::vector<unsigned char> pub_key_pem);
 
     /**
      * Generates an X509 certificate.
@@ -80,7 +84,7 @@ public:
      */
     static X509_ptr generate_certificate(EVP_PKEY* ca_key, X509* ca_cert, EVP_PKEY* pub_key, const std::string& cn, const std::string& organisation, const std::string& country_code, int day_valid=MAX_CERT_VALIDITY_DAYS);
     static BioPtr certificate_to_bio(X509* cert);
-    static std::vector<char> get_bio_to_pem(BIO* bio);
+    static std::vector<unsigned char> get_bio_to_pem(BIO* bio);
 
     /**
      * Checks the validity of a given certificate against an authority's certificate.
@@ -92,10 +96,11 @@ public:
      *         if certificate verification fails due to invalid input or logic error.
      */
     static bool check_certificate_validity(X509* cert, X509* authority);
-    static X509_ptr load_certificate(std::vector<char> pem_cert);
+    static X509_ptr load_certificate(std::vector<unsigned char> pem_cert);
 
-    static std::vector<unsigned char> signData(EVP_PKEY* priv_key, std::vector<char> data);
-    static bool checkSignature(std::vector<char> data, std::vector<unsigned char> signature, X509* certificate);
+    /* Signature */
+    static std::vector<unsigned char> signData(EVP_PKEY* priv_key, std::vector<unsigned char> data);
+    static bool checkSignature(std::vector<unsigned char> data, std::vector<unsigned char> signature, X509* certificate);
 };
 
 

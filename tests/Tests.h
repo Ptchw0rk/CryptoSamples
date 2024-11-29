@@ -13,7 +13,13 @@ class Tests : public CppUnit::TestFixture {
 public:
     CPPUNIT_TEST_SUITE(Tests);
     CPPUNIT_TEST(testPrivKeyGen);
-    CPPUNIT_TEST(testPubKeyGen);
+
+    // RSA import/export
+    CPPUNIT_TEST(testExportPrivkey);
+    CPPUNIT_TEST(testExportPubkey);
+    CPPUNIT_TEST(testLoadPrivkey);
+    CPPUNIT_TEST(testLoadPubkey);
+
     CPPUNIT_TEST(testCertGen);
     CPPUNIT_TEST(testCertCheck);
     CPPUNIT_TEST(testExportLoadCert);
@@ -25,12 +31,18 @@ public:
     //Tests();
     //~Tests() override;
 protected:
+    // RSA
     static EVP_PKEY_ptr testPrivKeyGen();
-    static void testPubKeyGen();
+    static void testExportPrivkey();
+    static void testExportPubkey();
+    static void testLoadPrivkey();
+    static void testLoadPubkey();
+    // RSA certs
     static void testCertGen();
     static void testCertCheck();
     static void testExportLoadCert();
     static void testSignData();
+    // Sym (AES)
     static void testSymEncrypt();
     static void testAsymEncrypt();
 };

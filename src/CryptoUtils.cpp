@@ -10,6 +10,8 @@
 #include <openssl/rand.h>
 #include <openssl/rsa.h>
 #include <openssl/sha.h>
+#include <openssl/decoder.h>
+#include <openssl/encoder.h>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -330,12 +332,101 @@ X509_ptr CryptoUtils::generate_certificate(EVP_PKEY *ca_key, X509 *ca_cert, EVP_
     return x509;
 }
 
-std::string CryptoUtils::get_pub_key(EVP_PKEY *priv_key) {
+std::vector<unsigned char> CryptoUtils::export_pub_key(const EVP_PKEY *key) {
     BioPtr bio(BIO_new(BIO_s_mem()));
-    PEM_write_bio_PUBKEY(bio.get(), priv_key);
+    PEM_write_bio_PUBKEY(bio.get(), key);
     char *pem_data;
     long pem_size = BIO_get_mem_data(bio.get(), &pem_data);
-    return std::string(pem_data, pem_size);
+    return std::vector<unsigned char>(pem_data, pem_data+pem_size);
+
+}
+
+std::vector<unsigned char> CryptoUtils::export_priv_key(const EVP_PKEY *pub_key, const std::string &password) {
+    OSSL_ENCODER_CTX *ectx;
+    const char *format = "PEM";
+    const char *structure =	"PrivateKeyInfo"; /* PKCS#8 structure */
+
+    ectx = OSSL_ENCODER_CTX_new_for_pkey(pub_key,
+                         OSSL_KEYMGMT_SELECT_KEYPAIR,
+                         format, structure,
+                         nullptr);
+    if (ectx == nullptr) {
+        std::cerr << "Unable to create context for public key loading" << std::endl;
+        handleOpenSSLErrors();
+    }
+    if(!password.empty()) {
+        OSSL_ENCODER_CTX_set_passphrase(ectx, reinterpret_cast<const unsigned char *>(password.c_str()), password.length());
+        OSSL_ENCODER_CTX_set_cipher(ectx, "AES-256-CBC", nullptr);
+    }
+
+    const BioPtr bio(BIO_new(BIO_s_mem()));
+
+    if (!OSSL_ENCODER_to_bio(ectx, bio.get())) {
+        std::cout << "Failed to export public key" << std::endl;
+        handleOpenSSLErrors();
+    }
+    OSSL_ENCODER_CTX_free(ectx);
+    return get_bio_to_pem(bio.get());
+}
+
+EVP_PKEY_ptr CryptoUtils::load_priv_key(const std::vector<unsigned char> &priv_key_pem, const std::string& password) {
+    /*BioPtr bio(BIO_new(BIO_s_mem()));
+    BIO_write(bio.get(), priv_key_pem.data(), static_cast<int>(priv_key_pem.size()));
+    EVP_PKEY_ptr priv_key(PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr));
+    if(!priv_key) {
+        std::cerr << "Unable to load private key" << std::endl;
+        handleOpenSSLErrors();
+    }
+    return priv_key;*/
+    BioPtr bio(BIO_new(BIO_s_mem()));
+    BIO_write(bio.get(), priv_key_pem.data(), static_cast<int>(priv_key_pem.size()));
+
+    EVP_PKEY* priv_key;
+
+    OSSL_DECODER_CTX* dctx = OSSL_DECODER_CTX_new_for_pkey(&priv_key, "PEM", nullptr, "RSA",
+        OSSL_KEYMGMT_SELECT_KEYPAIR, nullptr, nullptr);
+    if(dctx == nullptr) {
+        std::cerr << "Unable to create decoder for public key" << std::endl;
+        handleOpenSSLErrors();
+    }
+    if(!password.empty()) {
+        OSSL_DECODER_CTX_set_passphrase(dctx, reinterpret_cast<const unsigned char *>(password.c_str()), password.length());
+    }
+    if(OSSL_DECODER_from_bio(dctx, bio.get()) != 1) {
+        std::cerr << "Unable to load public key from bio" << std::endl;
+        OSSL_DECODER_CTX_free(dctx);
+        handleOpenSSLErrors();
+    }
+
+    OSSL_DECODER_CTX_free(dctx);
+
+
+    return EVP_PKEY_ptr(priv_key);
+}
+
+EVP_PKEY_ptr CryptoUtils::load_pub_key(std::vector<unsigned char> pub_key_pem) {
+    BioPtr bio(BIO_new(BIO_s_mem()));
+    BIO_write(bio.get(), pub_key_pem.data(), static_cast<int>(pub_key_pem.size()));
+
+    EVP_PKEY* pub_key;
+
+    OSSL_DECODER_CTX* dctx = OSSL_DECODER_CTX_new_for_pkey(&pub_key, "PEM", nullptr, "RSA",
+        OSSL_KEYMGMT_SELECT_PUBLIC_KEY, nullptr, nullptr);
+    if(dctx == nullptr) {
+        std::cerr << "Unable to create decoder for public key" << std::endl;
+        OSSL_DECODER_CTX_free(dctx);
+        handleOpenSSLErrors();
+    }
+    if(OSSL_DECODER_from_bio(dctx, bio.get()) != 1) {
+        std::cerr << "Unable to load public key" << std::endl;
+        OSSL_DECODER_CTX_free(dctx);
+        handleOpenSSLErrors();
+    }
+
+    OSSL_DECODER_CTX_free(dctx);
+
+
+    return EVP_PKEY_ptr(pub_key);
 }
 
 BioPtr CryptoUtils::certificate_to_bio(X509 *cert) {
@@ -351,10 +442,10 @@ BioPtr CryptoUtils::certificate_to_bio(X509 *cert) {
     return bio;
 }
 
-std::vector<char> CryptoUtils::get_bio_to_pem(BIO *bio) {
+std::vector<unsigned char> CryptoUtils::get_bio_to_pem(BIO *bio) {
     char *pem_data;
     long pem_size = BIO_get_mem_data(bio, &pem_data);
-    return std::vector<char>(pem_data, pem_data + pem_size);
+    return std::vector<unsigned char>(pem_data, pem_data + pem_size);
 }
 
 bool CryptoUtils::check_certificate_validity(X509 *cert, X509 *authority) {
@@ -384,7 +475,7 @@ bool CryptoUtils::check_certificate_validity(X509 *cert, X509 *authority) {
     return true;
 }
 
-X509_ptr CryptoUtils::load_certificate(std::vector<char> pem_cert) {
+X509_ptr CryptoUtils::load_certificate(std::vector<unsigned char> pem_cert) {
     BioPtr bio(BIO_new(BIO_s_mem()));
     if (!bio) {
         std::cerr << "Unable to load certificate" << std::endl;
@@ -403,7 +494,7 @@ X509_ptr CryptoUtils::load_certificate(std::vector<char> pem_cert) {
     return cert;
 }
 
-std::vector<unsigned char> CryptoUtils::signData(EVP_PKEY *priv_key, std::vector<char> data) {
+std::vector<unsigned char> CryptoUtils::signData(EVP_PKEY *priv_key, std::vector<unsigned char> data) {
     EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
     if (!md_ctx) {
         std::cerr << "Unable to create MD context" << std::endl;
@@ -438,7 +529,7 @@ std::vector<unsigned char> CryptoUtils::signData(EVP_PKEY *priv_key, std::vector
     return signature;
 }
 
-bool CryptoUtils::checkSignature(std::vector<char> data, std::vector<unsigned char> signature, X509 *certificate) {
+bool CryptoUtils::checkSignature(std::vector<unsigned char> data, std::vector<unsigned char> signature, X509 *certificate) {
     EVP_PKEY_ptr public_key(X509_get_pubkey(certificate));
     if (!public_key) {
         std::cerr << "Unable to get public key" << std::endl;
